@@ -1,0 +1,14 @@
+{
+  "scripts": {
+    "transform": "npx jscodeshift -t ./src/transform.js --parser=tsx --extensions=ts,tsx --ignore-pattern=\"**/node_modules/**\"",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@typescript-eslint/parser": "8.4.0",
+    "jscodeshift": "17.0.0",
+    "recast": "0.23.9"
+  },
+  "devDependencies": {
+    "jest": "29.7.0"
+  }
+}

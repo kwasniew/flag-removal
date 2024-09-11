@@ -1,0 +1,87 @@
+module.exports = function (fileInfo, api, options) {
+    const j = api.jscodeshift;
+    const root = j(fileInfo.source);
+    const flagName = options.flagName || 'my-flag-to-remove'; // Use the provided flag name or default to 'archiveProjects'
+
+    // Helper to check if a node is a literal true/false
+    const isLiteral = (node, value) => node && (node.type === 'Literal' || node.type === 'BooleanLiteral') && node.value === value;
+    const isLiteralTrue = node => isLiteral(node, true);
+    const isLiteralFalse = node => isLiteral(node, false);
+
+    // Helper to safely remove a variable declarator
+    const removeVariableDeclarator = path => {
+        const parent = path.parentPath.node;
+        if (parent.declarations.length === 1) {
+            j(path.parentPath.parentPath).remove(); // Remove entire VariableDeclaration if it's the only declarator
+        } else {
+            j(path).remove(); // Remove only the declarator
+        }
+    };
+
+    // Pass 1: Replace `this.flagResolver.isEnabled(flagName)` with `true`
+    root.find(j.CallExpression, {
+        callee: {
+            type: 'MemberExpression',
+            object: {
+                type: 'MemberExpression',
+                object: { type: 'ThisExpression' },
+                property: { name: 'flagResolver' }
+            },
+            property: { name: 'isEnabled' }
+        },
+        arguments: [{ value: flagName }]
+    }).replaceWith(() => j.literal(true));
+
+    // Pass 1: Replace useUiFlag(flagName) with `true`
+    root.find(j.CallExpression, {
+        callee: { type: 'Identifier', name: 'useUiFlag' },
+        arguments: [{ value: flagName }]
+    }).replaceWith(() => j.literal(true));
+
+    // Pass 2: Simplify boolean expressions
+    root.find(j.LogicalExpression).replaceWith(path => {
+        const { left, right, operator } = path.node;
+
+        if (operator === '&&') {
+            return isLiteralTrue(left) ? right : isLiteralFalse(left) ? left : isLiteralTrue(right) ? left : isLiteralFalse(right) ? right : path.node;
+        }
+
+        if (operator === '||') {
+            return isLiteralTrue(left) ? left : isLiteralFalse(left) ? right : path.node;
+        }
+
+        return path.node;
+    });
+
+    // Pass 3: Inline variables if they are true or false, and remove their declarations
+    root.find(j.VariableDeclarator)
+        .filter(path => isLiteralTrue(path.node.init) || isLiteralFalse(path.node.init))
+        .forEach(path => {
+            const varName = path.node.id.name;
+            const literalValue = path.node.init;
+
+            // Replace all **usages** of this variable with its literal value (skip declaration)
+            root.find(j.Identifier)
+                .filter(identifierPath => identifierPath.name !== 'id' && identifierPath.node.name === varName)
+                .replaceWith(() => literalValue);
+
+            // Remove the variable declaration safely
+            removeVariableDeclarator(path);
+        });
+
+    // Pass 4: Remove `if (true)` or `if (false)`
+    root.find(j.IfStatement).forEach(path => {
+        const test = path.node.test;
+
+        if (isLiteralTrue(test)) {
+            const consequent = path.node.consequent;
+            j(path).replaceWith(consequent.type === 'BlockStatement' ? consequent.body : consequent);
+        }
+
+        if (isLiteralFalse(test)) {
+            j(path).remove();
+        }
+    });
+
+    return root.toSource();
+};
