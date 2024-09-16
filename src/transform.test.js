@@ -11,7 +11,7 @@ function applyTransform(source, flagName, options = {}) {
             jscodeshift: require('jscodeshift'),
             stats: () => {},
         },
-        { flagName, ...transformOptions }
+        { flagName, skipNoFlag: false,  ...transformOptions }
     );
 }
 
@@ -21,6 +21,22 @@ describe('Feature flag transformation', () => {
     it('should replace inline flag resolver call with true', () => {
         const input = `
             if (this.flagResolver.isEnabled('${flagName}')) {
+                projectExists = await this.projectStore.hasActiveProject(projectId);
+                doSomethingElse();
+            } else {
+                projectExists = await this.projectStore.hasProject(projectId);
+            }
+        `;
+        const output = `
+            projectExists = await this.projectStore.hasActiveProject(projectId);
+            doSomethingElse();
+        `;
+        expect(applyTransform(input, flagName)).toBe(output);
+    });
+
+    it('should resolve Boolean(true)', () => {
+        const input = `
+            if (Boolean(true)) {
                 projectExists = await this.projectStore.hasActiveProject(projectId);
                 doSomethingElse();
             } else {
@@ -153,5 +169,19 @@ describe('Feature flag transformation', () => {
         `;
         const output = input; // No transformation expected
         expect(applyTransform(input, flagName)).toBe(output);
+    });
+
+    it('should replace useUiFlag with true and simplify ConditionallyRender', () => {
+        const input = `
+            const archiveProjectsEnabled = useUiFlag('archiveProjects');
+            <ConditionallyRender
+                condition={Boolean(archiveProjectsEnabled)}
+                show={<ProjectArchiveLink />}
+            />;
+        `;
+        const output = `
+            <ProjectArchiveLink />;
+        `;
+        expect(applyTransform(input, 'archiveProjects')).toBe(output);
     });
 });

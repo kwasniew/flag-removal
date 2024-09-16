@@ -3,10 +3,24 @@ module.exports = function (fileInfo, api, options) {
     const root = j(fileInfo.source);
     const flagName = options.flagName || 'my-flag-to-remove'; // Use the provided flag name or default to 'archiveProjects'
 
+    const containsFlagName = root.find(j.Literal, { value: flagName }).size() > 0;
+    const skipNoFlag = options.skipNoFlag ?? true;
+
+    // If the flag name is not found, return the original source
+    if (!containsFlagName && skipNoFlag) {
+        return fileInfo.source;
+    }
+
     // Helper to check if a node is a literal true/false
     const isLiteral = (node, value) => node && (node.type === 'Literal' || node.type === 'BooleanLiteral') && node.value === value;
-    const isLiteralTrue = node => isLiteral(node, true);
-    const isLiteralFalse = node => isLiteral(node, false);
+    const isBooleanCallExpression = (node, value) => {
+        return node && node.type === 'CallExpression' &&
+            node.callee.name === 'Boolean' &&
+            node.arguments.length === 1 &&
+            isLiteral(node.arguments[0], value);
+    };
+    const isLiteralTrue = node => isLiteral(node, true) || isBooleanCallExpression(node, true);
+    const isLiteralFalse = node => isLiteral(node, false) || isBooleanCallExpression(node, false);
 
     // Helper to safely remove a variable declarator
     const removeVariableDeclarator = path => {
@@ -80,6 +94,31 @@ module.exports = function (fileInfo, api, options) {
 
         if (isLiteralFalse(test)) {
             j(path).remove();
+        }
+    });
+
+    // Pass 5: Simplify `ConditionallyRender` components
+    root.find(j.JSXElement, {
+        openingElement: {
+            name: { name: 'ConditionallyRender' },
+            attributes: [{ name: { name: 'condition' } }]
+        }
+    }).forEach(path => {
+        const conditionAttr = path.node.openingElement.attributes.find(attr => attr.name.name === 'condition');
+        const showAttr = path.node.openingElement.attributes.find(attr => attr.name.name === 'show');
+
+        if (conditionAttr && conditionAttr.value && conditionAttr.value.expression) {
+            const condition = conditionAttr.value.expression;
+
+            if (isLiteralTrue(condition)) {
+                // Replace with the content of the `show` prop
+                if (showAttr && showAttr.value) {
+                    j(path).replaceWith(showAttr.value.expression);
+                }
+            } else if (isLiteralFalse(condition)) {
+                // Remove the element if the condition is false
+                j(path).remove();
+            }
         }
     });
 
